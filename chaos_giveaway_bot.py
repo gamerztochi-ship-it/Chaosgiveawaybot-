@@ -402,42 +402,57 @@ async def post_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Usage:*\n\n"
+            "*1 button:*\n`/post Button1 | Your message here`\n\n"
+            "*2 buttons:*\n`/post Button1 | Button2 | Your message here`\n\n"
+            "*Example:*\n`/post 🎯 Join Now | 👑 Leaderboard | Giveaway is live!`",
+            parse_mode="Markdown"
+        )
+        return
+
+    full_text = " ".join(context.args)
+    parts = [p.strip() for p in full_text.split("|")]
+
     bot_username = (await context.bot.get_me()).username
 
-    text = (
-        "🎉 *CHAOS INDIA 🇮🇳 — Members Giveaway is LIVE!* 🎉\n\n"
-        "We're celebrating our community and YOU can win by inviting your friends!\n\n"
-        "🎯 *Target:* 2,000 Members\n\n"
-        "🏆 *Prizes:*\n"
-        "🥇 1st Place — ₹400\n"
-        "🥈 2nd Place — ₹300\n"
-        "🥉 3rd Place — ₹200\n"
-        "🎖 4th Place — Admin in Group Chat\n\n"
-        "📌 *Rules:*\n"
-        "• Invite the highest number of real members\n"
-        "• Fake accounts or bot invites = instant disqualification & ban\n"
-        "• Leaderboard will be checked at the end of the event\n"
-        "• Only invites via your unique bot link will be counted\n\n"
-        "⏳ *Duration:* 5 Days\n"
-        "👥 *Current Members:* 970\n\n"
-        "The more people you invite, the higher your chances of winning!\n\n"
-        "🚀 *Press the button below to get your unique invite link and start now!*"
-    )
+    if len(parts) == 2:
+        # 1 button
+        btn1_name = parts[0]
+        message = parts[1]
+        keyboard = [[
+            InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway")
+        ]]
+    elif len(parts) >= 3:
+        # 2 buttons
+        btn1_name = parts[0]
+        btn2_name = parts[1]
+        message = " | ".join(parts[2:])
+        keyboard = [[
+            InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway"),
+            InlineKeyboardButton(btn2_name, url=f"https://t.me/{bot_username}?start=leaderboard")
+        ]]
+    else:
+        await update.message.reply_text(
+            "❌ Format galat hai!\n\n"
+            "`/post Button1 | Message`\n"
+            "ya\n"
+            "`/post Button1 | Button2 | Message`",
+            parse_mode="Markdown"
+        )
+        return
 
-    keyboard = [
-        [
-            InlineKeyboardButton("🎯 Join Giveaway", url=f"https://t.me/{bot_username}?start=giveaway"),
-            InlineKeyboardButton("👑 Leaderboard", url=f"https://t.me/{bot_username}?start=leaderboard")
-        ]
-    ]
-
-    await context.bot.send_message(
-        chat_id=CHANNEL_USERNAME,
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    await update.message.reply_text("✅ Giveaway post sent to channel!")
+    try:
+        await context.bot.send_message(
+            chat_id=CHANNEL_USERNAME,
+            text=message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await update.message.reply_text("✅ Post sent to channel with buttons!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}\n\nMarkdown formatting check karo.")
 
 # ============ /addadmin (OWNER ONLY) ============
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -534,11 +549,4 @@ def main():
     app.add_handler(CallbackQueryHandler(mystats_callback, pattern="^mystats$"))
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern="^leaderboard$"))
 
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_new_member))
-
-    logger.info("🚀 Chaos Giveaway Bot started!")
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
-
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBER

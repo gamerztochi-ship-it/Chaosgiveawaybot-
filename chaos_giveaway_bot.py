@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import os
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -12,9 +13,9 @@ from telegram.ext import (
 # ============ CONFIG ============
 BOT_TOKEN = "8649968862:AAFbV0IOW72JQpI7L_16d1GuMa7a4CtPrRM"
 OWNER_ID = 6730329053
-CHANNEL_USERNAME = "@CHAOSINDIA"
 DATA_FILE = "giveaway_data.json"
 ADMINS_FILE = "admins.json"
+CHANNEL_FILE = "channel.json"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             return json.load(f)
-    return {"users": {}, "joined_ids": []}
+    return {"users": {}, "joined_ids": [], "left_users": []}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
@@ -40,6 +41,16 @@ def save_admins(admins):
     with open(ADMINS_FILE, "w") as f:
         json.dump(admins, f, indent=2)
 
+def load_channel():
+    if os.path.exists(CHANNEL_FILE):
+        with open(CHANNEL_FILE, "r") as f:
+            return json.load(f).get("channel", "@CHAOSINDIA")
+    return "@CHAOSINDIA"
+
+def save_channel(channel):
+    with open(CHANNEL_FILE, "w") as f:
+        json.dump({"channel": channel}, f)
+
 def is_owner(user_id):
     return user_id == OWNER_ID
 
@@ -54,20 +65,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     data = load_data()
+    channel = load_channel()
 
     args = context.args
     if args and args[0] == "giveaway":
         if user_id not in data["users"]:
             try:
                 link_obj = await context.bot.create_chat_invite_link(
-                    chat_id=CHANNEL_USERNAME,
+                    chat_id=channel,
                     name=f"ref_{user_id}",
                     creates_join_request=False
                 )
                 invite_link = link_obj.invite_link
             except Exception as e:
                 logger.error(f"Link create error: {e}")
-                invite_link = "https://t.me/CHAOSINDIA"
+                invite_link = f"https://t.me/{channel.replace('@','')}"
 
             data["users"][user_id] = {
                 "name": user.full_name,
@@ -129,11 +141,9 @@ async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in new_members:
         new_id = str(member.id)
 
-        # If this user EVER joined before (even after leaving), skip permanently
         if new_id in data.get("joined_ids", []):
             continue
 
-        # First time joining — mark permanently, no second chances
         data["joined_ids"].append(new_id)
 
         invite_link_used = None
@@ -143,7 +153,6 @@ async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if invite_link_used:
             for uid, udata in data["users"].items():
                 if udata["invite_link"] == invite_link_used:
-                    # Don't count self-invites
                     if new_id != uid:
                         udata["invited_ids"].append(new_id)
                         udata["invited_count"] += 1
@@ -158,20 +167,27 @@ async def mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry = get_user_entry(data, user_id)
 
     if not entry:
-        await update.message.reply_text(
-            "❌ You are not registered in the giveaway!\n\nUse /start to join."
-        )
+        await update.message.reply_text("❌ You are not registered!\n\nUse /start to join.")
         return
 
     sorted_users = sorted(data["users"].values(), key=lambda x: x["invited_count"], reverse=True)
     rank = next((i+1 for i, u in enumerate(sorted_users) if u["invite_link"] == entry["invite_link"]), "N/A")
+    count = entry["invited_count"]
+
+    # Progress bar (goal: 50 invites)
+    goal = 50
+    filled = min(int((count / goal) * 10), 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    percent = min(int((count / goal) * 100), 100)
 
     text = (
         f"📊 *Your Giveaway Stats*\n\n"
         f"👤 Name: {entry['name']}\n"
         f"🔗 Your Invite Link: `{entry['invite_link']}`\n"
-        f"👥 Total Invites: `{entry['invited_count']}`\n"
+        f"👥 Total Invites: `{count}`\n"
         f"🏆 Current Rank: `#{rank}`\n\n"
+        f"📈 Progress: `{bar}` {percent}%\n"
+        f"_{count}/{goal} invites to goal_\n\n"
         f"_Keep sharing to climb the leaderboard!_ 🔥"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -184,18 +200,26 @@ async def mystats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry = get_user_entry(data, user_id)
 
     if not entry:
-        await query.message.reply_text("❌ You are not registered! Use /start to join the giveaway.")
+        await query.message.reply_text("❌ You are not registered! Use /start to join.")
         return
 
     sorted_users = sorted(data["users"].values(), key=lambda x: x["invited_count"], reverse=True)
     rank = next((i+1 for i, u in enumerate(sorted_users) if u["invite_link"] == entry["invite_link"]), "N/A")
+    count = entry["invited_count"]
+
+    goal = 50
+    filled = min(int((count / goal) * 10), 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    percent = min(int((count / goal) * 100), 100)
 
     text = (
         f"📊 *Your Giveaway Stats*\n\n"
         f"👤 Name: {entry['name']}\n"
         f"🔗 Your Invite Link: `{entry['invite_link']}`\n"
-        f"👥 Total Invites: `{entry['invited_count']}`\n"
+        f"👥 Total Invites: `{count}`\n"
         f"🏆 Current Rank: `#{rank}`\n\n"
+        f"📈 Progress: `{bar}` {percent}%\n"
+        f"_{count}/{goal} invites to goal_\n\n"
         f"_Keep sharing to climb the leaderboard!_ 🔥"
     )
     await query.message.reply_text(text, parse_mode="Markdown")
@@ -210,7 +234,7 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-    text = "👑 *CHAOS INDIA 2K GIVEAWAY — TOP 10*\n\n"
+    text = "👑 *CHAOS INDIA GIVEAWAY — TOP 10*\n\n"
     for i, u in enumerate(sorted_users):
         name = u["name"][:20]
         text += f"{medals[i]} `#{i+1}` *{name}* — `{u['invited_count']} invites`\n"
@@ -229,7 +253,7 @@ async def leaderboard_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-    text = "👑 *CHAOS INDIA 2K GIVEAWAY — TOP 10*\n\n"
+    text = "👑 *CHAOS INDIA GIVEAWAY — TOP 10*\n\n"
     for i, u in enumerate(sorted_users):
         name = u["name"][:20]
         text += f"{medals[i]} `#{i+1}` *{name}* — `{u['invited_count']} invites`\n"
@@ -237,7 +261,120 @@ async def leaderboard_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     text += "\n_Share your link and climb the ranks!_ 🔥"
     await query.message.reply_text(text, parse_mode="Markdown")
 
-# ============ /check (OWNER ONLY) ============
+# ============ /leave (USER) ============
+async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    data = load_data()
+
+    if user_id not in data["users"]:
+        await update.message.reply_text("❌ You are not registered in the giveaway.")
+        return
+
+    entry = data["users"][user_id]
+
+    # Remove invites this user gave to others
+    for invited_id in entry.get("invited_ids", []):
+        for uid, udata in data["users"].items():
+            if invited_id in udata.get("invited_ids", []):
+                udata["invited_ids"].remove(invited_id)
+                udata["invited_count"] = max(0, udata["invited_count"] - 1)
+                break
+
+    # Log the leave
+    if "left_users" not in data:
+        data["left_users"] = []
+    data["left_users"].append({
+        "name": entry["name"],
+        "username": entry.get("username", "N/A"),
+        "user_id": user_id,
+        "had_invites": entry["invited_count"]
+    })
+
+    del data["users"][user_id]
+    save_data(data)
+
+    await update.message.reply_text(
+        "✅ You have been removed from the giveaway.\n\n"
+        "Your invite link is now inactive and all your data has been deleted.\n\n"
+        "_You can rejoin anytime using /start._",
+        parse_mode="Markdown"
+    )
+
+# ============ /leavelog (ADMIN) ============
+async def leave_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    data = load_data()
+    left = data.get("left_users", [])
+
+    if not left:
+        await update.message.reply_text("📋 No one has left the giveaway yet.")
+        return
+
+    text = f"📋 *Users Who Left Giveaway*\n\n_Total: {len(left)}_\n\n"
+    for i, u in enumerate(left, 1):
+        text += f"`{i}.` *{u['name']}* (@{u['username']}) — had `{u['had_invites']}` invites\n"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ============ /kick (ADMIN) ============
+async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: `/kick @username` or `/kick userID`", parse_mode="Markdown")
+        return
+
+    query_input = context.args[0].replace("@", "").lower()
+    data = load_data()
+
+    found_uid = None
+    for uid, udata in data["users"].items():
+        if uid == query_input or (udata.get("username") or "").lower() == query_input:
+            found_uid = uid
+            break
+
+    if not found_uid:
+        await update.message.reply_text("❌ User not found in giveaway.")
+        return
+
+    removed = data["users"].pop(found_uid)
+
+    # Remove their invites from others
+    for invited_id in removed.get("invited_ids", []):
+        for uid, udata in data["users"].items():
+            if invited_id in udata.get("invited_ids", []):
+                udata["invited_ids"].remove(invited_id)
+                udata["invited_count"] = max(0, udata["invited_count"] - 1)
+                break
+
+    # Log it
+    if "left_users" not in data:
+        data["left_users"] = []
+    data["left_users"].append({
+        "name": removed["name"],
+        "username": removed.get("username", "N/A"),
+        "user_id": found_uid,
+        "had_invites": removed["invited_count"],
+        "kicked": True
+    })
+
+    save_data(data)
+
+    await update.message.reply_text(
+        f"🚫 *User Kicked from Giveaway*\n\n"
+        f"👤 Name: {removed['name']}\n"
+        f"📛 Username: @{removed.get('username','N/A')}\n"
+        f"🆔 ID: `{found_uid}`\n"
+        f"👥 Had Invites: `{removed['invited_count']}`\n\n"
+        f"All their data and invite counts removed.",
+        parse_mode="Markdown"
+    )
+
+# ============ /check (ADMIN) ============
 async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -258,7 +395,7 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
 
     if not found:
-        await update.message.reply_text("❌ User not found. Check the username or ID.")
+        await update.message.reply_text("❌ User not found.")
         return
 
     sorted_users = sorted(data["users"].values(), key=lambda x: x["invited_count"], reverse=True)
@@ -276,7 +413,30 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-# ============ /winner (OWNER ONLY) ============
+# ============ /stats (ADMIN) ============
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    data = load_data()
+    total_users = len(data["users"])
+    total_invites = sum(u["invited_count"] for u in data["users"].values())
+    total_left = len(data.get("left_users", []))
+    top_user = max(data["users"].values(), key=lambda x: x["invited_count"]) if data["users"] else None
+
+    text = (
+        f"📊 *Giveaway Stats*\n\n"
+        f"👥 Total Participants: `{total_users}`\n"
+        f"🔗 Total Invites: `{total_invites}`\n"
+        f"🚪 Total Left: `{total_left}`\n\n"
+    )
+
+    if top_user:
+        text += f"🏆 Top Inviter: *{top_user['name']}* — `{top_user['invited_count']} invites`"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ============ /winner (ADMIN) ============
 async def winner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -300,68 +460,85 @@ async def winner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "\n🎉 Congratulations to all winners!"
     await update.message.reply_text(text, parse_mode="Markdown")
 
-# ============ /leave (USER) ============
-async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    data = load_data()
-
-    if user_id not in data["users"]:
-        await update.message.reply_text("❌ You are not registered in the giveaway.")
-        return
-
-    del data["users"][user_id]
-    save_data(data)
-    await update.message.reply_text(
-        "✅ You have been successfully removed from the giveaway.\n\n"
-        "Your invite link is now inactive and your data has been deleted.\n\n"
-        "_You can rejoin anytime using /start._",
-        parse_mode="Markdown"
-    )
-
-# ============ /kick (OWNER ONLY) ============
-async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ============ /announce (ADMIN) ============
+async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: `/kick @username` or `/kick userID`", parse_mode="Markdown")
+        await update.message.reply_text("Usage: `/announce Your message here`", parse_mode="Markdown")
         return
 
-    query_input = context.args[0].replace("@", "").lower()
+    message = " ".join(context.args)
     data = load_data()
 
-    found_uid = None
-    for uid, udata in data["users"].items():
-        if uid == query_input or (udata.get("username") or "").lower() == query_input:
-            found_uid = uid
-            break
-
-    if not found_uid:
-        await update.message.reply_text("❌ User not found in giveaway.")
+    if not data["users"]:
+        await update.message.reply_text("❌ No registered users to announce to.")
         return
 
-    removed = data["users"].pop(found_uid)
-    save_data(data)
+    success = 0
+    failed = 0
+
+    await update.message.reply_text(f"📢 Sending to {len(data['users'])} users...")
+
+    for uid in data["users"]:
+        try:
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text=f"📢 *Announcement from CHAOS INDIA Giveaway*\n\n{message}",
+                parse_mode="Markdown"
+            )
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
 
     await update.message.reply_text(
-        f"🚫 *User Removed from Giveaway*\n\n"
-        f"👤 Name: {removed['name']}\n"
-        f"📛 Username: @{removed['username']}\n"
-        f"🆔 ID: `{found_uid}`\n"
-        f"👥 Had Invites: `{removed['invited_count']}`\n\n"
-        f"Their link is now invalid.",
+        f"✅ Announcement sent!\n\n"
+        f"✔️ Success: `{success}`\n"
+        f"❌ Failed: `{failed}` (users who blocked bot)"
+    )
+
+# ============ /setchannel (ADMIN) ============
+async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        current = load_channel()
+        await update.message.reply_text(
+            f"📌 *Current Channel:* `{current}`\n\nUsage: `/setchannel @channelname`",
+            parse_mode="Markdown"
+        )
+        return
+
+    new_channel = context.args[0]
+    if not new_channel.startswith("@"):
+        new_channel = "@" + new_channel
+
+    save_channel(new_channel)
+    await update.message.reply_text(
+        f"✅ Channel set to `{new_channel}`",
         parse_mode="Markdown"
     )
 
-# ============ /reset (OWNER ONLY) ============
+# ============ /removechannel (ADMIN) ============
+async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    save_channel("@CHAOSINDIA")
+    await update.message.reply_text("✅ Channel reset to default: `@CHAOSINDIA`", parse_mode="Markdown")
+
+# ============ /reset (ADMIN) ============
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    save_data({"users": {}, "joined_ids": []})
+    save_data({"users": {}, "joined_ids": [], "left_users": []})
     await update.message.reply_text("✅ Giveaway has been reset. All data cleared.")
 
-# ============ /export (OWNER ONLY) ============
+# ============ /export (ADMIN) ============
 async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -378,26 +555,15 @@ async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     writer.writerow(["Rank", "Name", "Username", "UserID", "Invite Link", "Total Invites"])
 
     for rank, (uid, udata) in enumerate(sorted_users, 1):
-        writer.writerow([
-            rank,
-            udata["name"],
-            f"@{udata['username']}",
-            uid,
-            udata["invite_link"],
-            udata["invited_count"]
-        ])
+        writer.writerow([rank, udata["name"], f"@{udata['username']}", uid, udata["invite_link"], udata["invited_count"]])
 
     output.seek(0)
     bio = io.BytesIO(output.getvalue().encode("utf-8"))
     bio.name = "chaos_giveaway_results.csv"
 
-    await update.message.reply_document(
-        document=bio,
-        filename="chaos_giveaway_results.csv",
-        caption="📊 CHAOS INDIA Giveaway — Full Results"
-    )
+    await update.message.reply_document(document=bio, filename="chaos_giveaway_results.csv", caption="📊 CHAOS INDIA Giveaway — Full Results")
 
-# ============ /post (OWNER ONLY) ============
+# ============ /post (ADMIN) ============
 async def post_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -405,8 +571,8 @@ async def post_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ *Usage:*\n\n"
-            "*1 button:*\n`/post Button1 | Your message here`\n\n"
-            "*2 buttons:*\n`/post Button1 | Button2 | Your message here`\n\n"
+            "*1 button:*\n`/post Button1 | Your message`\n\n"
+            "*2 buttons:*\n`/post Button1 | Button2 | Your message`\n\n"
             "*Example:*\n`/post 🎯 Join Now | 👑 Leaderboard | Giveaway is live!`",
             parse_mode="Markdown"
         )
@@ -414,45 +580,33 @@ async def post_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     full_text = " ".join(context.args)
     parts = [p.strip() for p in full_text.split("|")]
-
     bot_username = (await context.bot.get_me()).username
+    channel = load_channel()
 
     if len(parts) == 2:
-        # 1 button
-        btn1_name = parts[0]
-        message = parts[1]
-        keyboard = [[
-            InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway")
-        ]]
+        btn1_name, message = parts[0], parts[1]
+        keyboard = [[InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway")]]
     elif len(parts) >= 3:
-        # 2 buttons
-        btn1_name = parts[0]
-        btn2_name = parts[1]
+        btn1_name, btn2_name = parts[0], parts[1]
         message = " | ".join(parts[2:])
         keyboard = [[
             InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway"),
             InlineKeyboardButton(btn2_name, url=f"https://t.me/{bot_username}?start=leaderboard")
         ]]
     else:
-        await update.message.reply_text(
-            "❌ Format galat hai!\n\n"
-            "`/post Button1 | Message`\n"
-            "ya\n"
-            "`/post Button1 | Button2 | Message`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Format galat hai!\n`/post Button1 | Message`", parse_mode="Markdown")
         return
 
     try:
         await context.bot.send_message(
-            chat_id=CHANNEL_USERNAME,
+            chat_id=channel,
             text=message,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        await update.message.reply_text("✅ Post sent to channel with buttons!")
+        await update.message.reply_text(f"✅ Post sent to {channel} with buttons!")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}\n\nMarkdown formatting check karo.")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 # ============ /addadmin (OWNER ONLY) ============
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -478,8 +632,7 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins.append(new_admin_id)
     save_admins(admins)
     await update.message.reply_text(
-        f"✅ *Admin Added!*\n\n🆔 User ID: `{new_admin_id}` now has admin access.\n\n"
-        f"They can use: /check, /kick, /winner, /export, /reset, /post",
+        f"✅ *Admin Added!*\n\n🆔 `{new_admin_id}` now has admin access.",
         parse_mode="Markdown"
     )
 
@@ -506,10 +659,7 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admins.remove(admin_id)
     save_admins(admins)
-    await update.message.reply_text(
-        f"🚫 *Admin Removed!*\n\n🆔 User ID: `{admin_id}` no longer has admin access.",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"🚫 *Admin Removed!*\n\n🆔 `{admin_id}` no longer has admin access.", parse_mode="Markdown")
 
 # ============ /admins (OWNER ONLY) ============
 async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -518,14 +668,13 @@ async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admins = load_admins()
     if not admins:
-        await update.message.reply_text("📋 No admins added yet.\n\nUse `/addadmin userID` to add one.", parse_mode="Markdown")
+        await update.message.reply_text("📋 No admins added yet.\n\nUse `/addadmin userID`", parse_mode="Markdown")
         return
 
     text = "👮 *Current Bot Admins*\n\n"
     for i, aid in enumerate(admins, 1):
         text += f"`{i}.` `{aid}`\n"
-    text += f"\n_Total: {len(admins)} admin(s)_\n\nUse `/removeadmin userID` to remove."
-
+    text += f"\n_Total: {len(admins)} admin(s)_"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 # ============ MAIN ============
@@ -536,17 +685,27 @@ def main():
     app.add_handler(CommandHandler("leave", leave))
     app.add_handler(CommandHandler("mystats", mystats))
     app.add_handler(CommandHandler("leaderboard", leaderboard))
-    app.add_handler(CommandHandler("addadmin", add_admin))
-    app.add_handler(CommandHandler("removeadmin", remove_admin))
-    app.add_handler(CommandHandler("admins", list_admins))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("leavelog", leave_log))
     app.add_handler(CommandHandler("check", check_user))
     app.add_handler(CommandHandler("kick", kick_user))
     app.add_handler(CommandHandler("winner", winner))
+    app.add_handler(CommandHandler("announce", announce))
+    app.add_handler(CommandHandler("setchannel", set_channel))
+    app.add_handler(CommandHandler("removechannel", remove_channel))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export_csv))
     app.add_handler(CommandHandler("post", post_giveaway))
+    app.add_handler(CommandHandler("addadmin", add_admin))
+    app.add_handler(CommandHandler("removeadmin", remove_admin))
+    app.add_handler(CommandHandler("admins", list_admins))
 
     app.add_handler(CallbackQueryHandler(mystats_callback, pattern="^mystats$"))
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern="^leaderboard$"))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_new_member))
 
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBER
+    logger.info("🚀 Chaos Giveaway Bot started!")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()

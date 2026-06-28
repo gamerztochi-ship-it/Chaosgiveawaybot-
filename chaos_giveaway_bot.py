@@ -301,6 +301,7 @@ async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+
 # ============ /leavelog (ADMIN) ============
 async def leave_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -563,50 +564,119 @@ async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_document(document=bio, filename="chaos_giveaway_results.csv", caption="📊 CHAOS INDIA Giveaway — Full Results")
 
+MESSAGE_FILE = "saved_message.txt"
+
+def load_saved_message():
+    if os.path.exists(MESSAGE_FILE):
+        with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    return None
+
+def save_message_file(text):
+    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+        f.write(text)
+
+# ============ /setmessage (ADMIN) ============
+async def set_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    # Get raw text after /setmessage command — preserves newlines
+    full_text = update.message.text
+    # Remove the command part
+    if "\n" in full_text:
+        message = full_text.split("\n", 1)[1] if full_text.startswith("/setmessage\n") else full_text[len("/setmessage"):].strip()
+    else:
+        message = full_text[len("/setmessage"):].strip()
+
+    if not message:
+        current = load_saved_message()
+        if current:
+            await update.message.reply_text(
+                f"📝 *Current saved message:*\n\n{current}\n\n_To update: send your new message on the next line after /setmessage_",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ No message saved yet.\n\n"
+                "Send your message like this:\n"
+                "`/setmessage`\n"
+                "Your message here\n"
+                "With all formatting and spaces",
+                parse_mode="Markdown"
+            )
+        return
+
+    save_message_file(message)
+    await update.message.reply_text(
+        f"✅ *Message saved!*\n\nNow use:\n`/post 🎯 Join Giveaway | 👑 Leaderboard`\n\nto post it to the channel with buttons.",
+        parse_mode="Markdown"
+    )
+
 # ============ /post (ADMIN) ============
 async def post_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    if not context.args:
-        await update.message.reply_text(
-            "❌ *Usage:*\n\n"
-            "*1 button:*\n`/post Button1 | Your message`\n\n"
-            "*2 buttons:*\n`/post Button1 | Button2 | Your message`\n\n"
-            "*Example:*\n`/post 🎯 Join Now | 👑 Leaderboard | Giveaway is live!`",
-            parse_mode="Markdown"
-        )
-        return
-
-    full_text = " ".join(context.args)
-    parts = [p.strip() for p in full_text.split("|")]
+    saved_msg = load_saved_message()
     bot_username = (await context.bot.get_me()).username
     channel = load_channel()
 
-    if len(parts) == 2:
-        btn1_name, message = parts[0], parts[1]
+    if not context.args:
+        if not saved_msg:
+            await update.message.reply_text(
+                "❌ No saved message!\n\n"
+                "First save your message:\n"
+                "`/setmessage`\n"
+                "Your message here...\n\n"
+                "Then use:\n"
+                "`/post 🎯 Join | 👑 Leaderboard`",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ *Buttons missing!*\n\n"
+                "Usage:\n`/post Button1`\nor\n`/post Button1 | Button2`",
+                parse_mode="Markdown"
+            )
+        return
+
+    full_args = " ".join(context.args)
+    parts = [p.strip() for p in full_args.split("|")]
+
+    if len(parts) == 1:
+        btn1_name = parts[0]
         keyboard = [[InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway")]]
-    elif len(parts) >= 3:
-        btn1_name, btn2_name = parts[0], parts[1]
-        message = " | ".join(parts[2:])
+    else:
+        btn1_name = parts[0]
+        btn2_name = parts[1]
         keyboard = [[
             InlineKeyboardButton(btn1_name, url=f"https://t.me/{bot_username}?start=giveaway"),
             InlineKeyboardButton(btn2_name, url=f"https://t.me/{bot_username}?start=leaderboard")
         ]]
-    else:
-        await update.message.reply_text("❌ Format galat hai!\n`/post Button1 | Message`", parse_mode="Markdown")
+
+    if not saved_msg:
+        await update.message.reply_text("❌ No saved message! Use `/setmessage` first.", parse_mode="Markdown")
         return
 
     try:
         await context.bot.send_message(
             chat_id=channel,
-            text=message,
+            text=saved_msg,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         await update.message.reply_text(f"✅ Post sent to {channel} with buttons!")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        try:
+            await context.bot.send_message(
+                chat_id=channel,
+                text=saved_msg,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            await update.message.reply_text(f"✅ Post sent to {channel}!")
+        except Exception as e2:
+            await update.message.reply_text(f"❌ Error: {e2}")
 
 # ============ /addadmin (OWNER ONLY) ============
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -695,6 +765,7 @@ def main():
     app.add_handler(CommandHandler("removechannel", remove_channel))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export_csv))
+    app.add_handler(CommandHandler("setmessage", set_message))
     app.add_handler(CommandHandler("post", post_giveaway))
     app.add_handler(CommandHandler("addadmin", add_admin))
     app.add_handler(CommandHandler("removeadmin", remove_admin))
